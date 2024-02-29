@@ -222,9 +222,10 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     })?;
 
     let out = Command::new("make")
+        .arg("-silent")
         .arg("-C")
         .arg(tmp.path())
-        .arg("test")
+        .arg("@test")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()

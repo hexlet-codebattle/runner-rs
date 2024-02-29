@@ -10,6 +10,7 @@ RUN cargo fetch
 RUN cargo build --release
 
 COPY src src/
+RUN touch src/main.rs
 RUN cargo build --release
 
 FROM alpine:3.18
