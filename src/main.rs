@@ -1,9 +1,34 @@
-use std::{fs, os::unix, path::PathBuf, process::Stdio};
+use std::{fs, os::unix, path::PathBuf, process::Stdio, time::Duration};
 
 use actix_web::{http::StatusCode, post, web, App, HttpServer};
 use serde::{Deserialize, Serialize};
-use temp_dir::TempDir;
-use tokio::process::Command;
+use tokio::{io::AsyncReadExt, process::Command, sync::oneshot, time};
+use uuid::Uuid;
+
+struct TmpDir {
+    path: PathBuf,
+}
+
+impl TmpDir {
+    fn new() -> std::io::Result<Self> {
+        let mut path = PathBuf::from(String::from("/tmp"));
+        path.push(Uuid::new_v4().to_string());
+        fs::create_dir(&path)?;
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        if let Err(e) = fs::remove_dir_all(&self.path) {
+            log::error!("remove tmp dir: {}", e);
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -28,7 +53,7 @@ struct Payload {
     timeout: String,
     solution_text: String,
     lang_slug: Lang,
-    asserts: String,
+    asserts: Option<String>,
     checker_text: Option<String>,
 }
 
@@ -59,37 +84,47 @@ fn make_symlinks<'a, I: IntoIterator<Item = &'a str>>(
 #[post("/run")]
 async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_web::Error> {
     log::debug!("{}", serde_json::to_string(&payload).unwrap());
-    let tmp = TempDir::new().map_err(|e| {
+    let timeout: u64 = payload.timeout.parse().map_err(|e| {
+        log::error!("parse timeout: {}", e);
+        actix_web::error::InternalError::new("wrong timeout format", StatusCode::BAD_REQUEST)
+    })?;
+
+    let tmp = TmpDir::new().map_err(|e| {
         log::error!("create tmp dir: {}", e);
         internal_error!()
     })?;
+    let tmp_path = tmp.path();
+
     let cwd = std::env::current_dir().map_err(|e| {
         log::error!("get current dir: {}", e);
         internal_error!()
     })?;
     let check_path = if matches!(payload.lang_slug, Lang::Dart) {
-        tmp.path().join("lib")
+        tmp_path.join("lib")
     } else {
-        tmp.path().join("check")
+        tmp_path.join("check")
     };
     fs::create_dir(&check_path).map_err(|e| {
         log::error!("create check dir: {}", e);
         internal_error!()
     })?;
-    unix::fs::symlink(cwd.join("Makefile"), tmp.path().join("Makefile")).map_err(|e| {
+    unix::fs::symlink(cwd.join("Makefile"), tmp_path.join("Makefile")).map_err(|e| {
         log::error!("symlink makefile: {}", e);
         internal_error!()
     })?;
-    fs::write(check_path.join("asserts.json"), payload.asserts.as_bytes()).map_err(|e| {
-        log::error!("write asserts file: {}", e);
-        internal_error!()
-    })?;
+
+    if let Some(ref asserts) = payload.asserts {
+        fs::write(check_path.join("asserts.json"), asserts.as_bytes()).map_err(|e| {
+            log::error!("write asserts file: {}", e);
+            internal_error!()
+        })?;
+    }
 
     let solution_filename;
     match payload.lang_slug {
         Lang::Clojure => {
             solution_filename = "solution.clj";
-            make_symlinks(&cwd, &tmp.path().to_owned(), ["runner.clj", "bb.edn"]).map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["runner.clj", "bb.edn"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 internal_error!()
             })?;
@@ -107,7 +142,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Csharp => {
             solution_filename = "Solution.cs";
-            make_symlinks(&cwd, &tmp.path().to_owned(), ["Program.cs"]).map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["Program.cs"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 internal_error!()
             })?;
@@ -118,7 +153,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Dart => {
             solution_filename = "solution.dart";
-            make_symlinks(&cwd, &tmp.path().to_owned(), ["pubspec.yml"]).map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["pubspec.yml"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 internal_error!()
             })?;
@@ -131,7 +166,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             solution_filename = "solution.exs";
             make_symlinks(
                 &cwd,
-                &tmp.path().to_owned(),
+                &tmp_path.to_owned(),
                 ["mix.exs", "mix.lock", "runner.exs"],
             )
             .map_err(|e| {
@@ -162,7 +197,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             solution_filename = "Solution.java";
             make_symlinks(
                 &cwd,
-                &tmp.path().to_owned(),
+                &tmp_path.to_owned(),
                 ["javax_json.jar", "javax_json_api.jar"],
             )
             .map_err(|e| {
@@ -198,14 +233,14 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Python => {
             solution_filename = "solution.py";
-            fs::copy(cwd.join("checker.py"), tmp.path().join("checker.py")).map_err(|e| {
+            fs::copy(cwd.join("checker.py"), tmp_path.join("checker.py")).map_err(|e| {
                 log::error!("copy checker.py: {}", e);
                 internal_error!()
             })?;
         }
         Lang::Ruby => {
             solution_filename = "solution.rb";
-            fs::copy(cwd.join("checker.rb"), tmp.path().join("checker.rb")).map_err(|e| {
+            fs::copy(cwd.join("checker.rb"), tmp_path.join("checker.rb")).map_err(|e| {
                 log::error!("copy checker.rb: {}", e);
                 internal_error!()
             })?;
@@ -221,29 +256,52 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         internal_error!()
     })?;
 
-    let out = Command::new("make")
+    let mut child = Command::new("make")
         .arg("--silent")
         .arg("-C")
-        .arg(tmp.path())
+        .arg(tmp_path)
         .arg("test")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .unwrap()
-        .wait_with_output()
+        .unwrap();
+    let mut child_stdout = child.stdout.take().unwrap();
+    let mut child_stderr = child.stderr.take().unwrap();
+
+    let (tx, rx) = oneshot::channel();
+    let _t = time::timeout(Duration::from_secs(timeout), async move { tx.send(()) });
+
+    let exit_code = tokio::select! {
+        _ = rx => {
+            let _ = child.kill().await;
+            return Err(actix_web::error::InternalError::new("time limit exceeded", StatusCode::REQUEST_TIMEOUT).into());
+        },
+        code = child.wait() => code,
+    }.map_err(|e| {
+        log::error!("wait for child to finish: {}", e);
+        internal_error!()
+    })?;
+
+    let mut stdout = String::new();
+    child_stdout
+        .read_to_string(&mut stdout)
         .await
         .map_err(|e| {
-            log::error!("run check: {}", e);
+            log::error!("read check stdout: {}", e);
             internal_error!()
         })?;
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    if !out.status.success() {
+    let mut stderr = String::new();
+    child_stderr
+        .read_to_string(&mut stderr)
+        .await
+        .map_err(|e| {
+            log::error!("read check stderr: {}", e);
+            internal_error!()
+        })?;
+
+    if !exit_code.success() {
         log::error!("run check stdout: {}", stdout,);
-        //log::error!(
-        //"run check stderr: {:?}",
-        //String::from_utf8(out.stderr).unwrap()
-        //);
         return Err(actix_web::error::InternalError::new(
             stdout,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -253,7 +311,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
 
     log::debug!("{}", stdout);
     Ok(web::Json(Response {
-        exit_code: out.status.code(),
+        exit_code: exit_code.code(),
         stdout,
         stderr,
     }))
