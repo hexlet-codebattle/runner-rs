@@ -2,7 +2,7 @@ use std::{fs, os::unix, path::PathBuf, process::Stdio, time::Duration};
 
 use actix_web::{http::StatusCode, post, web, App, HttpServer};
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncReadExt, process::Command, sync::oneshot, time};
+use tokio::{io::AsyncReadExt, process::Command, time};
 use uuid::Uuid;
 
 struct TmpDir {
@@ -323,25 +323,22 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         .arg("test")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut child_stdout = child.stdout.take().unwrap();
     let mut child_stderr = child.stderr.take().unwrap();
 
-    let (tx, rx) = oneshot::channel();
-    let _t = time::timeout(Duration::from_secs(timeout), async move { tx.send(()) });
-
-    let exit_code = tokio::select! {
-        _ = rx => {
-            let _ = child.kill().await;
-            return Err(actix_web::error::InternalError::new("time limit exceeded", StatusCode::REQUEST_TIMEOUT).into());
-        },
-        code = child.wait() => code,
-    }.map_err(|e| {
-        log::error!("wait for child to finish: {}", e);
-        actix_web::error::ErrorInternalServerError("internal error")
-    })?;
+    let exit_code = time::timeout(Duration::from_secs(timeout), child.wait())
+        .await
+        .map_err(|e| {
+            log::warn!("timeout: {}", e);
+            actix_web::error::ErrorRequestTimeout("timelimit exceeded")
+        })?
+        .map_err(|e| {
+            log::error!("run check: {}", e);
+            actix_web::error::ErrorInternalServerError("internal error")
+        })?;
 
     let mut stdout = String::new();
     child_stdout
