@@ -64,12 +64,6 @@ struct Response {
     stderr: String,
 }
 
-macro_rules! internal_error {
-    () => {
-        actix_web::error::InternalError::new("internal error", StatusCode::INTERNAL_SERVER_ERROR)
-    };
-}
-
 fn make_symlinks<'a, I: IntoIterator<Item = &'a str>>(
     src: &PathBuf,
     dst: &PathBuf,
@@ -86,37 +80,59 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     log::debug!("{}", serde_json::to_string(&payload).unwrap());
     let timeout: u64 = payload.timeout.parse().map_err(|e| {
         log::error!("parse timeout: {}", e);
-        actix_web::error::InternalError::new("wrong timeout format", StatusCode::BAD_REQUEST)
+        actix_web::error::ErrorBadRequest("wrong timeout format")
     })?;
+
+    if matches!(
+        payload.lang_slug,
+        Lang::Clojure
+            | Lang::Cpp
+            | Lang::Csharp
+            | Lang::Dart
+            | Lang::Elixir
+            | Lang::Golang
+            | Lang::Haskell
+            | Lang::Js
+            | Lang::Kotlin
+            | Lang::Php
+    ) {
+        if payload.checker_text.is_none() {
+            return Err(actix_web::error::ErrorBadRequest(
+                "checker_text is required",
+            ));
+        }
+    }
 
     let tmp = TmpDir::new().map_err(|e| {
         log::error!("create tmp dir: {}", e);
-        internal_error!()
+        actix_web::error::ErrorInternalServerError("internal error")
     })?;
     let tmp_path = tmp.path();
 
     let cwd = std::env::current_dir().map_err(|e| {
         log::error!("get current dir: {}", e);
-        internal_error!()
+        actix_web::error::ErrorInternalServerError("internal error")
     })?;
     let check_path = if matches!(payload.lang_slug, Lang::Dart) {
         tmp_path.join("lib")
+    } else if matches!(payload.lang_slug, Lang::Haskell) {
+        tmp_path.join("Check")
     } else {
         tmp_path.join("check")
     };
     fs::create_dir(&check_path).map_err(|e| {
         log::error!("create check dir: {}", e);
-        internal_error!()
+        actix_web::error::ErrorInternalServerError("internal error")
     })?;
     unix::fs::symlink(cwd.join("Makefile"), tmp_path.join("Makefile")).map_err(|e| {
         log::error!("symlink makefile: {}", e);
-        internal_error!()
+        actix_web::error::ErrorInternalServerError("internal error")
     })?;
 
     if let Some(ref asserts) = payload.asserts {
         fs::write(check_path.join("asserts.json"), asserts.as_bytes()).map_err(|e| {
             log::error!("write asserts file: {}", e);
-            internal_error!()
+            actix_web::error::ErrorInternalServerError("internal error")
         })?;
     }
 
@@ -126,40 +142,56 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             solution_filename = "solution.clj";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["runner.clj", "bb.edn"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
-                internal_error!()
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
-            fs::copy(cwd.join("checker.clj"), check_path.join("checker.clj")).map_err(|e| {
-                log::error!("copy checker.clj: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("checker.clj"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.clj: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Cpp => {
             solution_filename = "solution.cpp";
-            fs::copy(cwd.join("checker.cpp"), check_path.join("checker.cpp")).map_err(|e| {
-                log::error!("copy checker.cpp: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("checker.cpp"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.cpp: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Csharp => {
             solution_filename = "Solution.cs";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["Program.cs"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
-                internal_error!()
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
-            fs::copy(cwd.join("Checker.cs"), check_path.join("Checker.cs")).map_err(|e| {
-                log::error!("copy Checker.cs: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("Checker.cs"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write Checker.cs: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Dart => {
             solution_filename = "solution.dart";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["pubspec.yml"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
-                internal_error!()
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
-            fs::copy(cwd.join("checker.dart"), check_path.join("checker.dart")).map_err(|e| {
-                log::error!("copy checker.dart: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("checker.dart"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.dart: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Elixir => {
@@ -171,27 +203,47 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             )
             .map_err(|e| {
                 log::error!("symlink files: {}", e);
-                internal_error!()
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
-            fs::copy(cwd.join("checker.exs"), check_path.join("checker.exs")).map_err(|e| {
-                log::error!("copy checker.exs: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("checker.exs"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.exs: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Golang => {
             solution_filename = "solution.go";
-            fs::copy(cwd.join("checker.go"), check_path.join("checker.go")).map_err(|e| {
-                log::error!("copy checker.go: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("checker.go"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.go: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Haskell => {
-            //solution_filename = "Solution.hs";
-            return Err(actix_web::error::InternalError::new(
-                "unimplemented",
-                StatusCode::BAD_REQUEST,
+            solution_filename = "Solution.hs";
+            make_symlinks(
+                &cwd,
+                &tmp_path.to_owned(),
+                ["HOwl.cabal", "magic.hs", "test_haskell.hs"],
             )
-            .into());
+            .map_err(|e| {
+                log::error!("symlink files: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
+            fs::write(
+                check_path.join("Checker.hs"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write Checker.hs: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
         }
         Lang::Java => {
             solution_filename = "Solution.java";
@@ -202,47 +254,55 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             )
             .map_err(|e| {
                 log::error!("symlink files: {}", e);
-                internal_error!()
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
-            fs::copy(cwd.join("Checker.java"), check_path.join("Checker.java")).map_err(|e| {
-                log::error!("copy Checker.java: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("Checker.java"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write Checker.java: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Js => {
             //solution_filename = "solution.js";
-            return Err(actix_web::error::InternalError::new(
-                "unimplemented",
-                StatusCode::BAD_REQUEST,
-            )
-            .into());
+            return Err(actix_web::error::ErrorBadRequest("unimplemented"));
         }
         Lang::Kotlin => {
             solution_filename = "solution.kt";
-            fs::copy(cwd.join("checker.kt"), check_path.join("checker.kt")).map_err(|e| {
-                log::error!("copy checker.kt: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("checker.kt"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.kt: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Php => {
             solution_filename = "solution.php";
-            fs::copy(cwd.join("checker.php"), check_path.join("checker.php")).map_err(|e| {
-                log::error!("copy checker.php: {}", e);
-                internal_error!()
+            fs::write(
+                check_path.join("checker.php"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.php: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Python => {
             solution_filename = "solution.py";
             fs::copy(cwd.join("checker.py"), tmp_path.join("checker.py")).map_err(|e| {
                 log::error!("copy checker.py: {}", e);
-                internal_error!()
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Ruby => {
             solution_filename = "solution.rb";
             fs::copy(cwd.join("checker.rb"), tmp_path.join("checker.rb")).map_err(|e| {
                 log::error!("copy checker.rb: {}", e);
-                internal_error!()
+                actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
     }
@@ -253,7 +313,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     )
     .map_err(|e| {
         log::error!("write solution file: {}", e);
-        internal_error!()
+        actix_web::error::ErrorInternalServerError("internal error")
     })?;
 
     let mut child = Command::new("make")
@@ -280,7 +340,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         code = child.wait() => code,
     }.map_err(|e| {
         log::error!("wait for child to finish: {}", e);
-        internal_error!()
+        actix_web::error::ErrorInternalServerError("internal error")
     })?;
 
     let mut stdout = String::new();
@@ -289,7 +349,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         .await
         .map_err(|e| {
             log::error!("read check stdout: {}", e);
-            internal_error!()
+            actix_web::error::ErrorInternalServerError("internal error")
         })?;
     let mut stderr = String::new();
     child_stderr
@@ -297,7 +357,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         .await
         .map_err(|e| {
             log::error!("read check stderr: {}", e);
-            internal_error!()
+            actix_web::error::ErrorInternalServerError("internal error")
         })?;
 
     if !exit_code.success() {
