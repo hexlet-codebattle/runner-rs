@@ -1,6 +1,6 @@
 use std::{fs, os::unix, path::PathBuf, process::Stdio, time::Duration};
 
-use actix_web::{http::StatusCode, post, web, App, HttpServer};
+use actix_web::{post, web, App, HttpServer};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command, time};
 use uuid::Uuid;
@@ -342,15 +342,6 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             log::error!("read check stderr: {}", e);
             actix_web::error::ErrorInternalServerError("internal error")
         })?;
-
-    if !exit_code.success() {
-        log::error!("run check stdout: {}", stdout,);
-        return Err(actix_web::error::InternalError::new(
-            stdout,
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )
-        .into());
-    };
 
     log::debug!("{}", stdout);
     Ok(web::Json(Response {
