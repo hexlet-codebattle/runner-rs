@@ -196,21 +196,8 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Elixir => {
             solution_filename = "solution.exs";
-            make_symlinks(
-                &cwd,
-                &tmp_path.to_owned(),
-                ["mix.exs", "mix.lock", "runner.exs"],
-            )
-            .map_err(|e| {
-                log::error!("symlink files: {}", e);
-                actix_web::error::ErrorInternalServerError("internal error")
-            })?;
-            fs::write(
-                check_path.join("checker.exs"),
-                payload.checker_text.as_ref().unwrap(),
-            )
-            .map_err(|e| {
-                log::error!("write checker.exs: {}", e);
+            fs::copy(cwd.join("checker.exs"), tmp_path.join("checker.exs")).map_err(|e| {
+                log::error!("copy checker.exs: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
