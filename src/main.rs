@@ -195,8 +195,8 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Elixir => {
             solution_filename = "solution.exs";
-            fs::copy(cwd.join("checker.exs"), tmp_path.join("checker.exs")).map_err(|e| {
-                log::error!("copy checker.exs: {}", e);
+            fs::copy(cwd.join("checker"), tmp_path.join("checker")).map_err(|e| {
+                log::error!("copy checker: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
