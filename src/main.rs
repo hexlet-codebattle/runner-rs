@@ -93,7 +93,6 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             | Lang::Golang
             | Lang::Haskell
             | Lang::Kotlin
-            | Lang::Php
     ) {
         if payload.checker_text.is_none() {
             return Err(actix_web::error::ErrorBadRequest(
@@ -287,12 +286,8 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Php => {
             solution_filename = "solution.php";
-            fs::write(
-                check_path.join("checker.php"),
-                payload.checker_text.as_ref().unwrap(),
-            )
-            .map_err(|e| {
-                log::error!("write checker.php: {}", e);
+            fs::copy(cwd.join("checker.php"), tmp_path.join("checker.php")).map_err(|e| {
+                log::error!("copy checker.php: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
