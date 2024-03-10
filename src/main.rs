@@ -90,6 +90,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             | Lang::Cpp
             | Lang::Csharp
             | Lang::Dart
+            | Lang::Java
             | Lang::Golang
             | Lang::Haskell
             | Lang::Kotlin
