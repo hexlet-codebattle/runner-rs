@@ -46,6 +46,7 @@ enum Lang {
     Php,
     Python,
     Ruby,
+    Ts,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,7 +92,6 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             | Lang::Dart
             | Lang::Golang
             | Lang::Haskell
-            | Lang::Js
             | Lang::Kotlin
             | Lang::Php
     ) {
@@ -261,8 +261,18 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             })?;
         }
         Lang::Js => {
-            //solution_filename = "solution.js";
-            return Err(actix_web::error::ErrorBadRequest("unimplemented"));
+            solution_filename = "solution.js";
+            fs::copy(cwd.join("checker.js"), tmp_path.join("checker.js")).map_err(|e| {
+                log::error!("copy checker.js: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
+        }
+        Lang::Ts => {
+            solution_filename = "solution.ts";
+            fs::copy(cwd.join("checker.js"), tmp_path.join("checker.js")).map_err(|e| {
+                log::error!("copy checker.js: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
         }
         Lang::Kotlin => {
             solution_filename = "solution.kt";
