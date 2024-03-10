@@ -174,7 +174,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Csharp => {
             solution_filename = "Solution.cs";
-            make_symlinks(&cwd, &tmp_path.to_owned(), ["Program.cs"]).map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["Program.cs", "app.csproj", "obj"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
