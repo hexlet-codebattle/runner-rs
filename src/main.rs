@@ -342,16 +342,18 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     let mut child_stdout = child.stdout.take().unwrap();
     let mut child_stderr = child.stderr.take().unwrap();
 
-    let exit_code = time::timeout(timeout, child.wait())
-        .await
-        .map_err(|e| {
+    let exit_code = match time::timeout(timeout, child.wait()).await {
+        Ok(c) => c,
+        Err(e) => {
             log::warn!("timeout: {}", e);
-            actix_web::error::ErrorRequestTimeout("timelimit exceeded")
-        })?
-        .map_err(|e| {
-            log::error!("run check: {}", e);
-            actix_web::error::ErrorInternalServerError("internal error")
-        })?;
+            let _ = child.kill().await;
+            return Err(actix_web::error::ErrorRequestTimeout("timelimit exceeded"));
+        }
+    }
+    .map_err(|e| {
+        log::error!("run check: {}", e);
+        actix_web::error::ErrorInternalServerError("internal error")
+    })?;
 
     let mut stdout = String::new();
     child_stdout
