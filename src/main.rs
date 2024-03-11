@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command, time};
 use uuid::Uuid;
 
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
 struct TmpDir {
     path: PathBuf,
 }
@@ -51,7 +53,7 @@ enum Lang {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Payload {
-    timeout: String,
+    timeout: Option<String>,
     solution_text: String,
     lang_slug: Lang,
     asserts: Option<String>,
@@ -79,10 +81,13 @@ fn make_symlinks<'a, I: IntoIterator<Item = &'a str>>(
 #[post("/run")]
 async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_web::Error> {
     log::debug!("{}", serde_json::to_string(&payload).unwrap());
-    let timeout: u64 = payload.timeout.parse().map_err(|e| {
-        log::error!("parse timeout: {}", e);
-        actix_web::error::ErrorBadRequest("wrong timeout format")
-    })?;
+    let timeout = match payload.timeout {
+        Some(ref t) => duration_str::parse(t).map_err(|e| {
+            log::error!("parse timeout: {}", e);
+            actix_web::error::ErrorBadRequest("wrong timeout format")
+        })?,
+        None => DEFAULT_TIMEOUT,
+    };
 
     if matches!(
         payload.lang_slug,
@@ -154,15 +159,12 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Cpp => {
             solution_filename = "solution.cpp";
-            make_symlinks(
-                &cwd,
-                &tmp_path.to_owned(),
-                ["json.hpp", "fifo_map.hpp"],
-            )
-            .map_err(|e| {
-                log::error!("symlink files: {}", e);
-                actix_web::error::ErrorInternalServerError("internal error")
-            })?;
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["json.hpp", "fifo_map.hpp"]).map_err(
+                |e| {
+                    log::error!("symlink files: {}", e);
+                    actix_web::error::ErrorInternalServerError("internal error")
+                },
+            )?;
             fs::write(
                 check_path.join("checker.cpp"),
                 payload.checker_text.as_ref().unwrap(),
@@ -174,7 +176,12 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Csharp => {
             solution_filename = "Solution.cs";
-            make_symlinks(&cwd, &tmp_path.to_owned(), ["Program.cs", "app.csproj", "obj"]).map_err(|e| {
+            make_symlinks(
+                &cwd,
+                &tmp_path.to_owned(),
+                ["Program.cs", "app.csproj", "obj"],
+            )
+            .map_err(|e| {
                 log::error!("symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
@@ -189,7 +196,12 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Dart => {
             solution_filename = "solution.dart";
-            make_symlinks(&cwd, &tmp_path.to_owned(), ["pubspec.yml"]).map_err(|e| {
+            make_symlinks(
+                &cwd,
+                &tmp_path.to_owned(),
+                ["pubspec.yml", ".packages", ".dart_tool"],
+            )
+            .map_err(|e| {
                 log::error!("symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
@@ -330,7 +342,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     let mut child_stdout = child.stdout.take().unwrap();
     let mut child_stderr = child.stderr.take().unwrap();
 
-    let exit_code = time::timeout(Duration::from_secs(timeout), child.wait())
+    let exit_code = time::timeout(timeout, child.wait())
         .await
         .map_err(|e| {
             log::warn!("timeout: {}", e);
@@ -358,7 +370,8 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             actix_web::error::ErrorInternalServerError("internal error")
         })?;
 
-    log::debug!("{}", stdout);
+    log::debug!("STDOUT: {}", stdout);
+    log::debug!("STDERR: {}", stderr);
     Ok(web::Json(Response {
         exit_code: exit_code.code(),
         stdout,
@@ -369,10 +382,11 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
+    log::info!("Starting runner service");
     HttpServer::new(|| App::new().service(run))
         .bind(("0.0.0.0", 8000))?
         .run()
         .await?;
-    log::debug!("DONE");
+    log::info!("Service stopped");
     Ok(())
 }
