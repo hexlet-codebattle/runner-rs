@@ -91,8 +91,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
 
     if matches!(
         payload.lang_slug,
-        Lang::Clojure
-            | Lang::Cpp
+            Lang::Cpp
             | Lang::Csharp
             | Lang::Dart
             | Lang::Java
@@ -144,16 +143,8 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     match payload.lang_slug {
         Lang::Clojure => {
             solution_filename = "solution.clj";
-            make_symlinks(&cwd, &tmp_path.to_owned(), ["runner.clj", "bb.edn"]).map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["checker.clj"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
-                actix_web::error::ErrorInternalServerError("internal error")
-            })?;
-            fs::write(
-                check_path.join("checker.clj"),
-                payload.checker_text.as_ref().unwrap(),
-            )
-            .map_err(|e| {
-                log::error!("write checker.clj: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
@@ -199,7 +190,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             make_symlinks(
                 &cwd,
                 &tmp_path.to_owned(),
-                ["pubspec.yml", ".packages", ".dart_tool"],
+                ["pubspec.yml", "pubspec.lock", ".dart_tool"],
             )
             .map_err(|e| {
                 log::error!("symlink files: {}", e);
