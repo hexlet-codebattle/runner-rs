@@ -279,6 +279,15 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Kotlin => {
             solution_filename = "solution.kt";
+            make_symlinks(
+                &cwd,
+                &tmp_path.to_owned(),
+                ["json_simple.jar"],
+            )
+            .map_err(|e| {
+                log::error!("symlink files: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
             fs::write(
                 check_path.join("checker.kt"),
                 payload.checker_text.as_ref().unwrap(),
