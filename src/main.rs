@@ -91,7 +91,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
 
     if matches!(
         payload.lang_slug,
-            Lang::Cpp
+        Lang::Cpp
             | Lang::Csharp
             | Lang::Dart
             | Lang::Java
@@ -118,8 +118,6 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     })?;
     let check_path = if matches!(payload.lang_slug, Lang::Dart) {
         tmp_path.join("lib")
-    } else if matches!(payload.lang_slug, Lang::Haskell) {
-        tmp_path.join("Check")
     } else {
         tmp_path.join("check")
     };
@@ -228,7 +226,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             make_symlinks(
                 &cwd,
                 &tmp_path.to_owned(),
-                ["HOwl.cabal", "magic.hs", "test_haskell.hs"],
+                ["checker.cabal", "check/Main.hs"],
             )
             .map_err(|e| {
                 log::error!("symlink files: {}", e);
@@ -279,12 +277,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Kotlin => {
             solution_filename = "solution.kt";
-            make_symlinks(
-                &cwd,
-                &tmp_path.to_owned(),
-                ["json_simple.jar"],
-            )
-            .map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["json_simple.jar"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
