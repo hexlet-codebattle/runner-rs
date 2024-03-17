@@ -243,12 +243,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Java => {
             solution_filename = "Solution.java";
-            make_symlinks(
-                &cwd,
-                &tmp_path.to_owned(),
-                ["javax_json.jar", "javax_json_api.jar"],
-            )
-            .map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["gson.jar"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
@@ -277,7 +272,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Kotlin => {
             solution_filename = "solution.kt";
-            make_symlinks(&cwd, &tmp_path.to_owned(), ["json_simple.jar"]).map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["gson.jar"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
