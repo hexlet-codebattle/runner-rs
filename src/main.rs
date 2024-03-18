@@ -223,12 +223,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Haskell => {
             solution_filename = "Solution.hs";
-            make_symlinks(
-                &cwd,
-                &tmp_path.to_owned(),
-                ["checker.cabal", "check/Main.hs"],
-            )
-            .map_err(|e| {
+            make_symlinks(&cwd, &tmp_path.to_owned(), ["checker.cabal"]).map_err(|e| {
                 log::error!("symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
