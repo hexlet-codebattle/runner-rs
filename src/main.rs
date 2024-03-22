@@ -48,6 +48,7 @@ enum Lang {
     Php,
     Python,
     Ruby,
+    Rust,
     Ts,
 }
 
@@ -98,6 +99,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             | Lang::Golang
             | Lang::Haskell
             | Lang::Kotlin
+            | Lang::Rust,
     ) {
         if payload.checker_text.is_none() {
             return Err(actix_web::error::ErrorBadRequest(
@@ -298,6 +300,26 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             solution_filename = "solution.rb";
             fs::copy(cwd.join("checker.rb"), tmp_path.join("checker.rb")).map_err(|e| {
                 log::error!("copy checker.rb: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
+        }
+        Lang::Rust => {
+            solution_filename = "solution.rs";
+            make_symlinks(
+                &cwd,
+                &tmp_path.to_owned(),
+                ["Cargo.toml", "Cargo.lock", "target"],
+            )
+            .map_err(|e| {
+                log::error!("symlink files: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
+            fs::write(
+                check_path.join("checker.rs"),
+                payload.checker_text.as_ref().unwrap(),
+            )
+            .map_err(|e| {
+                log::error!("write checker.rs: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
