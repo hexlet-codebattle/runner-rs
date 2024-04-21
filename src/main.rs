@@ -1,6 +1,6 @@
 use std::{fs, os::unix, path::PathBuf, process::Stdio, time::Duration};
 
-use actix_web::{post, web, App, HttpServer};
+use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncReadExt, process::Command, time};
 use uuid::Uuid;
@@ -386,11 +386,16 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     }))
 }
 
+#[get("/health")]
+async fn health() -> impl Responder {
+    HttpResponse::Ok()
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
     log::info!("Starting runner service");
-    HttpServer::new(|| App::new().service(run))
+    HttpServer::new(|| App::new().service(run).service(health))
         .bind(("0.0.0.0", 8000))?
         .run()
         .await?;
