@@ -1,8 +1,22 @@
-use std::{fs, os::unix, path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    fs,
+    os::unix::{self, process::CommandExt},
+    path::PathBuf,
+    process::{Command as StdCommand, Stdio},
+    time::Duration,
+};
 
 use actix_web::{get, post, web, App, HttpResponse, HttpServer, Responder};
+use nix::{
+    sys::{signal, wait::WaitStatus},
+    unistd::{ForkResult, Pid},
+};
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncReadExt, process::Command, time};
+use signal_hook::{
+    consts::signal::{SIGCHLD, SIGINT, SIGTERM},
+    iterator::Signals,
+};
+use tokio::{io::AsyncReadExt, process::Command, runtime::Runtime, time};
 use uuid::Uuid;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -79,12 +93,51 @@ fn make_symlinks<'a, I: IntoIterator<Item = &'a str>>(
     Ok(())
 }
 
+fn ashy_slashy(child: Pid, mut sig: Signals) {
+    for s in sig.forever() {
+        if s == SIGINT || s == SIGTERM {
+            log::info!("Caught signal, terminating child");
+            std::thread::spawn(move || {
+                if s == SIGINT {
+                    let _ = signal::kill(child, Some(signal::SIGINT));
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+                let _ = signal::kill(child, Some(signal::SIGTERM));
+                std::thread::sleep(Duration::from_secs(2));
+
+                log::info!("Child process does not respond, killing it");
+                let _ = signal::kill(child, Some(signal::SIGKILL));
+            });
+        }
+        let status = match nix::sys::wait::wait() {
+            Err(e) => {
+                log::error!("Could not wait for child process: {}", e);
+                std::process::exit(1);
+            }
+            Ok(status) => match status {
+                WaitStatus::Exited(pid, status) => Some((pid, status)),
+                WaitStatus::Signaled(pid, sig, _) => Some((pid, sig as i32 + 128)),
+                _ => None,
+            },
+        };
+        if let Some((pid, status)) = status {
+            if pid == child {
+                log::info!("Child exited, shutting down");
+                std::process::exit(status);
+            }
+            log::debug!("Reaped zombie with pid {}. Groovy!", pid);
+        }
+    }
+    log::error!("Signal stream exhausted, exiting");
+    std::process::exit(1);
+}
+
 #[post("/run")]
 async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_web::Error> {
     log::debug!("{}", serde_json::to_string(&payload).unwrap());
     let timeout = match payload.timeout {
         Some(ref t) => duration_str::parse(t).map_err(|e| {
-            log::error!("parse timeout: {}", e);
+            log::error!("Parse timeout: {}", e);
             actix_web::error::ErrorBadRequest("wrong timeout format")
         })?,
         None => DEFAULT_TIMEOUT,
@@ -109,13 +162,13 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
     }
 
     let tmp = TmpDir::new().map_err(|e| {
-        log::error!("create tmp dir: {}", e);
+        log::error!("Create tmp dir: {}", e);
         actix_web::error::ErrorInternalServerError("internal error")
     })?;
     let tmp_path = tmp.path();
 
     let cwd = std::env::current_dir().map_err(|e| {
-        log::error!("get current dir: {}", e);
+        log::error!("Get current dir: {}", e);
         actix_web::error::ErrorInternalServerError("internal error")
     })?;
     let check_path = if matches!(payload.lang_slug, Lang::Dart) {
@@ -124,17 +177,17 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         tmp_path.join("check")
     };
     fs::create_dir(&check_path).map_err(|e| {
-        log::error!("create check dir: {}", e);
+        log::error!("Create check dir: {}", e);
         actix_web::error::ErrorInternalServerError("internal error")
     })?;
     unix::fs::symlink(cwd.join("Makefile"), tmp_path.join("Makefile")).map_err(|e| {
-        log::error!("symlink makefile: {}", e);
+        log::error!("Symlink makefile: {}", e);
         actix_web::error::ErrorInternalServerError("internal error")
     })?;
 
     if let Some(ref asserts) = payload.asserts {
         fs::write(check_path.join("asserts.json"), asserts.as_bytes()).map_err(|e| {
-            log::error!("write asserts file: {}", e);
+            log::error!("Write asserts file: {}", e);
             actix_web::error::ErrorInternalServerError("internal error")
         })?;
     }
@@ -144,7 +197,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         Lang::Clojure => {
             solution_filename = "solution.clj";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["checker.clj"]).map_err(|e| {
-                log::error!("symlink files: {}", e);
+                log::error!("Symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
@@ -152,7 +205,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
             solution_filename = "solution.cpp";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["json.hpp", "fifo_map.hpp"]).map_err(
                 |e| {
-                    log::error!("symlink files: {}", e);
+                    log::error!("Symlink files: {}", e);
                     actix_web::error::ErrorInternalServerError("internal error")
                 },
             )?;
@@ -161,7 +214,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write checker.cpp: {}", e);
+                log::error!("Write checker.cpp: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
@@ -173,7 +226,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 ["Program.cs", "app.csproj", "obj"],
             )
             .map_err(|e| {
-                log::error!("symlink files: {}", e);
+                log::error!("Symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
             fs::write(
@@ -181,7 +234,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write Checker.cs: {}", e);
+                log::error!("Write Checker.cs: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
@@ -193,7 +246,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 ["pubspec.yml", "pubspec.lock", ".dart_tool"],
             )
             .map_err(|e| {
-                log::error!("symlink files: {}", e);
+                log::error!("Symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
             fs::write(
@@ -201,14 +254,14 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write checker.dart: {}", e);
+                log::error!("Write checker.dart: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Elixir => {
             solution_filename = "solution.exs";
             fs::copy(cwd.join("checker"), tmp_path.join("checker")).map_err(|e| {
-                log::error!("copy checker: {}", e);
+                log::error!("Copy checker: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
@@ -219,14 +272,14 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write checker.go: {}", e);
+                log::error!("Write checker.go: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Haskell => {
             solution_filename = "Solution.hs";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["checker.cabal"]).map_err(|e| {
-                log::error!("symlink files: {}", e);
+                log::error!("Symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
             fs::write(
@@ -234,14 +287,14 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write Checker.hs: {}", e);
+                log::error!("Write Checker.hs: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Java => {
             solution_filename = "Solution.java";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["gson.jar"]).map_err(|e| {
-                log::error!("symlink files: {}", e);
+                log::error!("Symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
             fs::write(
@@ -249,28 +302,28 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write Checker.java: {}", e);
+                log::error!("Write Checker.java: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Js => {
             solution_filename = "solution.js";
             fs::copy(cwd.join("checker.js"), tmp_path.join("checker.js")).map_err(|e| {
-                log::error!("copy checker.js: {}", e);
+                log::error!("Copy checker.js: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Ts => {
             solution_filename = "solution.ts";
             fs::copy(cwd.join("checker.js"), tmp_path.join("checker.js")).map_err(|e| {
-                log::error!("copy checker.js: {}", e);
+                log::error!("Copy checker.js: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Kotlin => {
             solution_filename = "solution.kt";
             make_symlinks(&cwd, &tmp_path.to_owned(), ["gson.jar"]).map_err(|e| {
-                log::error!("symlink files: {}", e);
+                log::error!("Symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
             fs::write(
@@ -278,28 +331,28 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write checker.kt: {}", e);
+                log::error!("Write checker.kt: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Php => {
             solution_filename = "solution.php";
             fs::copy(cwd.join("checker.php"), tmp_path.join("checker.php")).map_err(|e| {
-                log::error!("copy checker.php: {}", e);
+                log::error!("Copy checker.php: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Python => {
             solution_filename = "solution.py";
             fs::copy(cwd.join("checker.py"), tmp_path.join("checker.py")).map_err(|e| {
-                log::error!("copy checker.py: {}", e);
+                log::error!("Copy checker.py: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
         Lang::Ruby => {
             solution_filename = "solution.rb";
             fs::copy(cwd.join("checker.rb"), tmp_path.join("checker.rb")).map_err(|e| {
-                log::error!("copy checker.rb: {}", e);
+                log::error!("Copy checker.rb: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
@@ -311,7 +364,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 ["Cargo.toml", "Cargo.lock", "target"],
             )
             .map_err(|e| {
-                log::error!("symlink files: {}", e);
+                log::error!("Symlink files: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
             fs::write(
@@ -319,7 +372,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
                 payload.checker_text.as_ref().unwrap(),
             )
             .map_err(|e| {
-                log::error!("write checker.rs: {}", e);
+                log::error!("Write checker.rs: {}", e);
                 actix_web::error::ErrorInternalServerError("internal error")
             })?;
         }
@@ -330,33 +383,37 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         payload.solution_text.as_bytes(),
     )
     .map_err(|e| {
-        log::error!("write solution file: {}", e);
+        log::error!("Write solution file: {}", e);
         actix_web::error::ErrorInternalServerError("internal error")
     })?;
 
-    let mut child = Command::new("make")
-        .arg("--silent")
+    let mut cmd = StdCommand::new("make");
+    cmd.arg("--silent")
         .arg("-C")
         .arg(tmp_path)
         .arg("test")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .process_group(0);
+    let mut child = Command::from(cmd).spawn().unwrap();
     let mut child_stdout = child.stdout.take().unwrap();
     let mut child_stderr = child.stderr.take().unwrap();
 
     let exit_code = match time::timeout(timeout, child.wait()).await {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("timeout: {}", e);
-            let _ = child.kill().await;
+            log::warn!("Timeout: {}", e);
+            let pid = child.id().unwrap() as i32;
+            if let Err(e) = signal::killpg(Pid::from_raw(pid), signal::SIGKILL) {
+                log::error!("Cannot kill child group: {}", e);
+                std::process::exit(1);
+            }
             return Err(actix_web::error::ErrorRequestTimeout("timelimit exceeded"));
         }
     }
     .map_err(|e| {
-        log::error!("run check: {}", e);
+        log::error!("Run check: {}", e);
         actix_web::error::ErrorInternalServerError("internal error")
     })?;
 
@@ -365,7 +422,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         .read_to_string(&mut stdout)
         .await
         .map_err(|e| {
-            log::error!("read check stdout: {}", e);
+            log::error!("Read check stdout: {}", e);
             actix_web::error::ErrorInternalServerError("internal error")
         })?;
     let mut stderr = String::new();
@@ -373,7 +430,7 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         .read_to_string(&mut stderr)
         .await
         .map_err(|e| {
-            log::error!("read check stderr: {}", e);
+            log::error!("Read check stderr: {}", e);
             actix_web::error::ErrorInternalServerError("internal error")
         })?;
 
@@ -391,14 +448,32 @@ async fn health() -> impl Responder {
     HttpResponse::Ok()
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     env_logger::init();
-    log::info!("Starting runner service");
-    HttpServer::new(|| App::new().service(run).service(health))
-        .bind(("0.0.0.0", 8000))?
-        .run()
-        .await?;
-    log::info!("Service stopped");
-    Ok(())
+
+    if std::process::id() == 1 {
+        log::info!(
+            "We're the init process, forking and calling Ashy Slashy to take care of 'em zombies"
+        );
+        unsafe {
+            match nix::unistd::fork()? {
+                ForkResult::Parent { child } => {
+                    let signals = Signals::new(&[SIGCHLD, SIGINT, SIGTERM])?;
+                    ashy_slashy(child, signals);
+                }
+                _ => {}
+            }
+        }
+    };
+
+    let rt = Runtime::new()?;
+    rt.block_on(async {
+        log::info!("Starting runner service");
+        HttpServer::new(|| App::new().service(run).service(health))
+            .bind(("0.0.0.0", 8000))?
+            .run()
+            .await?;
+        log::info!("Service stopped");
+        Ok(())
+    })
 }
