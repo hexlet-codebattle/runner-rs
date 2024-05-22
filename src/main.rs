@@ -16,10 +16,16 @@ use signal_hook::{
     consts::signal::{SIGCHLD, SIGINT, SIGTERM},
     iterator::Signals,
 };
-use tokio::{io::AsyncReadExt, process::Command, runtime::Runtime, time};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    process::Command,
+    runtime::Runtime,
+    task, time,
+};
 use uuid::Uuid;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct TmpDir {
     path: PathBuf,
@@ -130,6 +136,12 @@ fn ashy_slashy(child: Pid, mut sig: Signals) {
     }
     log::error!("Signal stream exhausted, exiting");
     std::process::exit(1);
+}
+
+async fn read_stdio<R: AsyncRead + Unpin>(mut reader: R) -> std::io::Result<String> {
+    let mut buf = String::new();
+    reader.read_to_string(&mut buf).await?;
+    Ok(buf)
 }
 
 #[post("/run")]
@@ -397,8 +409,8 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         .stderr(Stdio::piped())
         .process_group(0);
     let mut child = Command::from(cmd).spawn().unwrap();
-    let mut child_stdout = child.stdout.take().unwrap();
-    let mut child_stderr = child.stderr.take().unwrap();
+    let stdout_handle = task::spawn(read_stdio(child.stdout.take().unwrap()));
+    let stderr_handle = task::spawn(read_stdio(child.stderr.take().unwrap()));
 
     let exit_code = match time::timeout(timeout, child.wait()).await {
         Ok(c) => c,
@@ -417,22 +429,14 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         actix_web::error::ErrorInternalServerError("internal error")
     })?;
 
-    let mut stdout = String::new();
-    child_stdout
-        .read_to_string(&mut stdout)
-        .await
-        .map_err(|e| {
-            log::error!("Read check stdout: {}", e);
-            actix_web::error::ErrorInternalServerError("internal error")
-        })?;
-    let mut stderr = String::new();
-    child_stderr
-        .read_to_string(&mut stderr)
-        .await
-        .map_err(|e| {
-            log::error!("Read check stderr: {}", e);
-            actix_web::error::ErrorInternalServerError("internal error")
-        })?;
+    let stdout = stdout_handle.await.map_err(|e| {
+        log::error!("Join stdout task: {}", e);
+        actix_web::error::ErrorInternalServerError("internal error")
+    })??;
+    let stderr = stderr_handle.await.map_err(|e| {
+        log::error!("Join stdout task: {}", e);
+        actix_web::error::ErrorInternalServerError("internal error")
+    })??;
 
     log::debug!("STDOUT: {}", stdout);
     log::debug!("STDERR: {}", stderr);
@@ -450,6 +454,7 @@ async fn health() -> impl Responder {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
+    log::info!("Runner version {}", VERSION);
 
     if std::process::id() == 1 {
         log::info!(

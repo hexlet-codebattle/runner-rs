@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "codebattle_runner"
-version = "0.1.0"
+version = "1.2.0"
 dependencies = [
  "actix-web",
  "anyhow",
