@@ -215,12 +215,15 @@ async fn run(payload: web::Json<Payload>) -> Result<web::Json<Response>, actix_w
         }
         Lang::Cpp => {
             solution_filename = "solution.cpp";
-            make_symlinks(&cwd, &tmp_path.to_owned(), ["json.hpp", "fifo_map.hpp"]).map_err(
-                |e| {
-                    log::error!("Symlink files: {}", e);
-                    actix_web::error::ErrorInternalServerError("internal error")
-                },
-            )?;
+            make_symlinks(
+                &cwd,
+                &tmp_path.to_owned(),
+                ["json.hpp", "fifo_map.hpp", "check/checker.hpp.gch"],
+            )
+            .map_err(|e| {
+                log::error!("Symlink files: {}", e);
+                actix_web::error::ErrorInternalServerError("internal error")
+            })?;
             fs::write(
                 check_path.join("checker.cpp"),
                 payload.checker_text.as_ref().unwrap(),
