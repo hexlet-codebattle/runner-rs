@@ -1,4 +1,4 @@
-FROM rust:1.76.0-alpine3.18 AS builder
+FROM rust:1.85-alpine3.20 AS builder
 
 WORKDIR /build
 
@@ -12,7 +12,7 @@ RUN cargo build --release
 COPY src src/
 RUN touch src/main.rs && cargo build --release
 
-FROM alpine:3.18
+FROM alpine:3.20
 
 WORKDIR /app
 
