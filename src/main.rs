@@ -302,10 +302,16 @@ fn main() -> anyhow::Result<()> {
     let rt = Runtime::new()?;
     rt.block_on(async {
         log::info!("Starting runner service");
-        HttpServer::new(|| App::new().service(run).service(health))
-            .bind(("0.0.0.0", 8000))?
-            .run()
-            .await?;
+        HttpServer::new(|| {
+            let json_config = web::JsonConfig::default().limit(10485760);
+            App::new()
+                .app_data(json_config)
+                .service(run)
+                .service(health)
+        })
+        .bind(("0.0.0.0", 8000))?
+        .run()
+        .await?;
         log::info!("Service stopped");
         Ok(())
     })
