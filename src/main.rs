@@ -40,6 +40,7 @@ enum Lang {
     Python,
     Ruby,
     Rust,
+    Swift,
     Ts,
 }
 
@@ -121,6 +122,7 @@ fn get_solution_chekcer_names(payload: &Payload) -> (&str, Option<&str>) {
         Lang::Python => ("solution.py", None),
         Lang::Ruby => ("solution.rb", None),
         Lang::Rust => ("solution.rs", Some("checker.rs")),
+        Lang::Swift => ("solution.swift", Some("checker.swift")),
     }
 }
 
@@ -146,7 +148,8 @@ async fn run(
             | Lang::Golang
             | Lang::Haskell
             | Lang::Kotlin
-            | Lang::Rust,
+            | Lang::Rust
+            | Lang::Swift,
     ) && payload.checker_text.is_none()
     {
         return Err(actix_web::error::ErrorBadRequest(
