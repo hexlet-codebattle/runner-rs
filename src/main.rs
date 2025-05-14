@@ -231,7 +231,7 @@ async fn run(
                         CloneFlags::CLONE_FS
                             | CloneFlags::CLONE_FILES
                             | CloneFlags::CLONE_NEWNS
-                            | CloneFlags::CLONE_NEWUSER
+                            // | CloneFlags::CLONE_NEWUSER TODO swift doesn't work with this
                             // | CloneFlags::CLONE_NEWPID TODO figure out how to use that properly
                             | CloneFlags::CLONE_NEWNET,
                     )?;
